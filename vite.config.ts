@@ -9,7 +9,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": "http://127.0.0.1:8787"
+      "/api": "http://127.0.0.1:8787",
+      // Stored OGP images are served by the API process, not by Vite.
+      "/ogp": "http://127.0.0.1:8787"
     }
   }
 });

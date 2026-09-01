@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,15 +8,60 @@ import { BookmarkDatabase } from "../src/server/db";
 let tempDir: string;
 let db: BookmarkDatabase;
 
-const createTestApp = () => createApp({ db });
+const createTestApp = () => createApp({ db, ogpDir: join(tempDir, "ogp") });
 
-const addBookmark = (input: { url: string; title: string; tags?: string; memo?: string }) =>
+const addBookmark = (input: {
+  url: string;
+  title: string;
+  tags?: string;
+  memo?: string;
+  ogpImageUrl?: string;
+}) =>
   db.createBookmark({
     url: input.url,
     title: input.title,
     tags: input.tags ?? "",
-    memo: input.memo ?? ""
+    memo: input.memo ?? "",
+    ogpImageUrl: input.ogpImageUrl ?? ""
   });
+
+const OGP_PAGE_URL = "https://example.com/post";
+const OGP_IMAGE_URL = "https://cdn.example.com/cover.png";
+const OGP_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+// app.ts always calls the global fetch, so the page and the image are both served
+// from here instead of through an injected fetcher.
+const stubOgpFetch = () => {
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === OGP_PAGE_URL) {
+      return new Response(`<title>Post</title><meta property="og:image" content="${OGP_IMAGE_URL}">`, {
+        headers: { "content-type": "text/html" }
+      });
+    }
+    if (url === OGP_IMAGE_URL) {
+      return new Response(OGP_IMAGE_BYTES, { headers: { "content-type": "image/png" } });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  });
+
+  vi.stubGlobal("fetch", fetcher);
+  return fetcher;
+};
+
+const createOgpBookmark = async (app: ReturnType<typeof createTestApp>) => {
+  const response = await app.request("http://localhost/api/bookmarks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: OGP_PAGE_URL })
+  });
+
+  return {
+    response,
+    body: (await response.json()) as { bookmark: { id: number; ogpImageUrl: string } }
+  };
+};
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "bookmark-demo-"));
@@ -153,5 +198,96 @@ describe("local server bookmarks API", () => {
     });
     expect(deleted.status).toBe(204);
     expect(missing.status).toBe(404);
+  });
+
+  it("stores the OGP image while creating a bookmark", async () => {
+    const fetcher = stubOgpFetch();
+
+    const { response, body } = await createOgpBookmark(createTestApp());
+
+    expect(response.status).toBe(201);
+    expect(body.bookmark.ogpImageUrl).toMatch(/^\/ogp\/[0-9a-f-]{36}\.png$/);
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toContain(OGP_IMAGE_URL);
+    await expect(readdir(join(tempDir, "ogp"))).resolves.toHaveLength(1);
+  });
+
+  it("removes a newly stored OGP image when bookmark creation fails", async () => {
+    stubOgpFetch();
+    vi.spyOn(db, "createBookmark").mockImplementationOnce(() => {
+      throw new Error("database write failed");
+    });
+
+    const { response } = await createOgpBookmark(createTestApp());
+
+    expect(response.status).toBe(500);
+    await expect(readdir(join(tempDir, "ogp"))).resolves.toEqual([]);
+  });
+
+  it("replaces and removes stored OGP images with their bookmarks", async () => {
+    stubOgpFetch();
+    const app = createTestApp();
+    const { body: createdBody } = await createOgpBookmark(app);
+
+    const updated = await app.request(`http://localhost/api/bookmarks/${createdBody.bookmark.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: OGP_PAGE_URL })
+    });
+    const updatedBody = (await updated.json()) as { bookmark: { ogpImageUrl: string } };
+
+    expect(updated.status).toBe(200);
+    expect(updatedBody.bookmark.ogpImageUrl).not.toBe(createdBody.bookmark.ogpImageUrl);
+    await expect(readdir(join(tempDir, "ogp"))).resolves.toEqual([
+      updatedBody.bookmark.ogpImageUrl.split("/").at(-1)
+    ]);
+
+    const deleted = await app.request(`http://localhost/api/bookmarks/${createdBody.bookmark.id}`, {
+      method: "DELETE"
+    });
+
+    expect(deleted.status).toBe(204);
+    await expect(readdir(join(tempDir, "ogp"))).resolves.toEqual([]);
+  });
+
+  it("keeps the previous OGP image when a bookmark update fails", async () => {
+    stubOgpFetch();
+    const app = createTestApp();
+    const { body: createdBody } = await createOgpBookmark(app);
+    vi.spyOn(db, "updateBookmark").mockImplementationOnce(() => {
+      throw new Error("database write failed");
+    });
+
+    const updated = await app.request(`http://localhost/api/bookmarks/${createdBody.bookmark.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: OGP_PAGE_URL })
+    });
+
+    expect(updated.status).toBe(500);
+    await expect(readdir(join(tempDir, "ogp"))).resolves.toEqual([
+      createdBody.bookmark.ogpImageUrl.split("/").at(-1)
+    ]);
+  });
+
+  it("serves a stored OGP image", async () => {
+    stubOgpFetch();
+    const app = createTestApp();
+    const { body } = await createOgpBookmark(app);
+
+    const image = await app.request(`http://localhost${body.bookmark.ogpImageUrl}`);
+
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toBe("image/png");
+    expect(image.headers.get("cache-control")).toBe("public, max-age=86400, immutable");
+    expect(new Uint8Array(await image.arrayBuffer())).toEqual(OGP_IMAGE_BYTES);
+  });
+
+  it("returns 404 for an OGP image that was never stored", async () => {
+    const response = await createTestApp().request(
+      "http://localhost/ogp/00000000-0000-0000-0000-000000000000.png"
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Image not found." });
   });
 });

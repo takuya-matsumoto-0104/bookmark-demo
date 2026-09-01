@@ -12,6 +12,7 @@ const makeBookmark = (overrides: Partial<Bookmark> = {}): Bookmark => ({
   title: "Example",
   tags: "docs, demo",
   memo: "Useful reference",
+  ogpImageUrl: "",
   createdAt: "2026-05-16T00:00:00.000Z",
   updatedAt: "2026-05-16T00:00:00.000Z",
   ...overrides
@@ -53,6 +54,30 @@ describe("App", () => {
     expect(screen.getByText("docs")).toBeInTheDocument();
     expect(screen.getByText("demo")).toBeInTheDocument();
     expect(screen.getByText("Useful reference")).toBeInTheDocument();
+  });
+
+  it("shows a decorative thumbnail when the bookmark has an OGP image", async () => {
+    const ogpImageUrl = "/ogp/11111111-1111-1111-1111-111111111111.png";
+    mockFetch.mockResolvedValueOnce(bookmarksResponse([makeBookmark({ ogpImageUrl })]));
+
+    const { container } = render(<App />);
+
+    await screen.findByRole("link", { name: "Example" });
+    // The thumbnail is hidden from assistive technology, so it has no role to query.
+    const thumbnail = container.querySelector(".bookmark-thumb");
+    expect(thumbnail).toHaveAttribute("src", ogpImageUrl);
+    expect(thumbnail).toHaveAttribute("alt", "");
+    expect(thumbnail).toHaveAttribute("aria-hidden", "true");
+    expect(thumbnail).toHaveAttribute("loading", "lazy");
+  });
+
+  it("renders no thumbnail when the bookmark has no OGP image", async () => {
+    mockFetch.mockResolvedValueOnce(bookmarksResponse([makeBookmark({ ogpImageUrl: "" })]));
+
+    const { container } = render(<App />);
+
+    await screen.findByRole("link", { name: "Example" });
+    expect(container.querySelector(".bookmark-thumb")).toBeNull();
   });
 
   it("adds a bookmark from the URL-only form and refreshes the first page", async () => {

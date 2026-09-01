@@ -156,6 +156,18 @@ h1 {
   border-radius: 8px;
 }
 
+.bookmark-item:has(.bookmark-thumb) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.bookmark-thumb {
+  width: 120px;
+  height: 90px;
+  object-fit: cover;
+  border: 1px solid #d7dde5;
+  border-radius: 6px;
+}
+
 .edit-form {
   grid-column: 1 / -1;
 }
@@ -344,8 +356,15 @@ h1 {
     align-items: stretch;
   }
 
-  .bookmark-item {
+  /* The :has() rule above is more specific, so it has to be reset by name here. */
+  .bookmark-item,
+  .bookmark-item:has(.bookmark-thumb) {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bookmark-thumb {
+    width: 96px;
+    height: 72px;
   }
 
   .icon-actions {
