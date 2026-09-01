@@ -3,7 +3,7 @@ import { fetchWithTimeout, readLimitedBody } from "./fetch";
 const TITLE_PATTERN = /<title\b[^>]*>([\s\S]*?)<\/title>/i;
 const MAX_TITLE_HTML_BYTES = 1024 * 1024;
 
-const decodeHtmlEntities = (value: string) =>
+export const decodeHtmlEntities = (value: string) =>
   value
     .replaceAll("&amp;", "&")
     .replaceAll("&lt;", "<")

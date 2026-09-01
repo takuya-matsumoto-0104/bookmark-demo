@@ -12,13 +12,14 @@ const { BookmarkDatabase } = await import("./db");
 const rootDir = process.cwd();
 const dbPath = resolve(process.env.BOOKMARK_DB_PATH ?? join(rootDir, "data", "bookmarks.sqlite"));
 const migrationsDir = resolve(rootDir, "migrations");
+const ogpDir = resolve(rootDir, "data", "ogp");
 const clientDir = resolve(rootDir, "dist", "client");
 const port = Number(process.env.PORT ?? "8787");
 
 const db = new BookmarkDatabase(dbPath);
 db.migrate(migrationsDir);
 
-const app = createApp({ db });
+const app = createApp({ db, ogpDir });
 
 if (existsSync(clientDir)) {
   app.use("/*", serveStatic({ root: clientDir }));

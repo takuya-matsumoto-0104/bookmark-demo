@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import type { BookmarkDatabase } from "./db";
 import type { CreateBookmarkRequest, UpdateBookmarkRequest } from "../shared/bookmarks";
+import { readOgpImage, storeOgpImage } from "./storage";
 import { fetchPageTitle, normalizeUrl } from "./title";
 
 export type AppDependencies = {
   db: BookmarkDatabase;
+  ogpDir: string;
 };
 
 const PAGE_SIZE = 10;
@@ -68,7 +70,7 @@ const buildSearchFilter = (terms: string[]) => {
 const isUniqueError = (error: unknown) =>
   error instanceof Error && error.message.toLowerCase().includes("unique");
 
-export const createApp = ({ db }: AppDependencies) => {
+export const createApp = ({ db, ogpDir }: AppDependencies) => {
   const app = new Hono();
 
   app.get("/api/bookmarks", (c) => {
@@ -104,9 +106,12 @@ export const createApp = ({ db }: AppDependencies) => {
     const tags = cleanTags((payload as CreateBookmarkRequest).tags);
     const memo = cleanText((payload as CreateBookmarkRequest).memo);
     const title = (await fetchPageTitle(url)) ?? url;
+    // storeOgpImage reports every failure as "", so a missing or unreachable
+    // image leaves the bookmark itself unaffected.
+    const ogpImageUrl = await storeOgpImage(url, ogpDir);
 
     try {
-      const bookmark = db.createBookmark({ url, title, tags, memo });
+      const bookmark = db.createBookmark({ url, title, tags, memo, ogpImageUrl });
       return c.json({ bookmark }, 201);
     } catch (error) {
       if (isUniqueError(error)) {
@@ -146,9 +151,11 @@ export const createApp = ({ db }: AppDependencies) => {
     const tags = cleanTags((payload as UpdateBookmarkRequest).tags);
     const memo = cleanText((payload as UpdateBookmarkRequest).memo);
     const title = (await fetchPageTitle(url)) ?? url;
+    // The URL may have changed, so the image is fetched again on every update.
+    const ogpImageUrl = await storeOgpImage(url, ogpDir);
 
     try {
-      const bookmark = db.updateBookmark(id, { url, title, tags, memo });
+      const bookmark = db.updateBookmark(id, { url, title, tags, memo, ogpImageUrl });
       if (!bookmark) {
         return c.json({ error: "Bookmark not found." }, 404);
       }
@@ -174,6 +181,19 @@ export const createApp = ({ db }: AppDependencies) => {
     }
 
     return c.body(null, 204);
+  });
+
+  app.get("/ogp/:name", async (c) => {
+    const image = await readOgpImage(ogpDir, c.req.param("name"));
+    if (!image) {
+      return c.json({ error: "Image not found." }, 404);
+    }
+
+    // File names are random and their contents never change, so a long cache is safe.
+    return c.body(image.body, 200, {
+      "content-type": image.contentType,
+      "cache-control": "public, max-age=86400, immutable"
+    });
   });
 
   return app;
