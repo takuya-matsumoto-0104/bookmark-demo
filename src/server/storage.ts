@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchWithTimeout, readLimitedBody } from "./fetch";
 import { extractOgImageUrl } from "./ogp";
@@ -82,6 +82,20 @@ export const storeOgpImage = async (
     return `${OGP_PUBLIC_PATH}/${fileName}`;
   } catch {
     return "";
+  }
+};
+
+export const deleteOgpImage = async (storageDir: string, publicPath: string) => {
+  const prefix = `${OGP_PUBLIC_PATH}/`;
+  const fileName = publicPath.startsWith(prefix) ? publicPath.slice(prefix.length) : "";
+  if (!OGP_FILE_NAME_PATTERN.test(fileName)) {
+    return;
+  }
+
+  try {
+    await unlink(join(storageDir, fileName));
+  } catch {
+    // Cleanup is best-effort because a missing OGP image must not break bookmark writes.
   }
 };
 

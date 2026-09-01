@@ -18,6 +18,12 @@ describe("extractOgImageUrl", () => {
     expect(extractOgImageUrl(PAGE_WITH_IMAGE, PAGE_URL)).toBe(IMAGE_URL);
   });
 
+  it("decodes one level of encoded ampersands in an og:image URL", () => {
+    const html = `<meta property="og:image" content="${IMAGE_URL}?width=1200&amp;amp;height=630">`;
+
+    expect(extractOgImageUrl(html, PAGE_URL)).toBe(`${IMAGE_URL}?width=1200&amp;height=630`);
+  });
+
   it("resolves a relative og:image against the page URL", () => {
     const html = '<meta property="og:image" content="/images/cover.png">';
 

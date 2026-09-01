@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { BookmarkDatabase } from "./db";
 import type { CreateBookmarkRequest, UpdateBookmarkRequest } from "../shared/bookmarks";
-import { readOgpImage, storeOgpImage } from "./storage";
+import { deleteOgpImage, readOgpImage, storeOgpImage } from "./storage";
 import { fetchPageTitle, normalizeUrl } from "./title";
 
 export type AppDependencies = {
@@ -114,6 +114,8 @@ export const createApp = ({ db, ogpDir }: AppDependencies) => {
       const bookmark = db.createBookmark({ url, title, tags, memo, ogpImageUrl });
       return c.json({ bookmark }, 201);
     } catch (error) {
+      await deleteOgpImage(ogpDir, ogpImageUrl);
+
       if (isUniqueError(error)) {
         return c.json({ error: "This URL is already bookmarked." }, 409);
       }
@@ -155,13 +157,25 @@ export const createApp = ({ db, ogpDir }: AppDependencies) => {
     const ogpImageUrl = await storeOgpImage(url, ogpDir);
 
     try {
-      const bookmark = db.updateBookmark(id, { url, title, tags, memo, ogpImageUrl });
-      if (!bookmark) {
+      const existingBookmark = db.getBookmark(id);
+      if (!existingBookmark) {
+        await deleteOgpImage(ogpDir, ogpImageUrl);
         return c.json({ error: "Bookmark not found." }, 404);
       }
 
+      const bookmark = db.updateBookmark(id, { url, title, tags, memo, ogpImageUrl });
+      if (!bookmark) {
+        await deleteOgpImage(ogpDir, ogpImageUrl);
+        return c.json({ error: "Bookmark not found." }, 404);
+      }
+
+      if (existingBookmark.ogpImageUrl !== ogpImageUrl) {
+        await deleteOgpImage(ogpDir, existingBookmark.ogpImageUrl);
+      }
       return c.json({ bookmark });
     } catch (error) {
+      await deleteOgpImage(ogpDir, ogpImageUrl);
+
       if (isUniqueError(error)) {
         return c.json({ error: "This URL is already bookmarked." }, 409);
       }
@@ -170,16 +184,18 @@ export const createApp = ({ db, ogpDir }: AppDependencies) => {
     }
   });
 
-  app.delete("/api/bookmarks/:id", (c) => {
+  app.delete("/api/bookmarks/:id", async (c) => {
     const id = parseBookmarkId(c.req.param("id"));
     if (id === null) {
       return c.json({ error: "Bookmark not found." }, 404);
     }
 
-    if (!db.deleteBookmark(id)) {
+    const bookmark = db.getBookmark(id);
+    if (!bookmark || !db.deleteBookmark(id)) {
       return c.json({ error: "Bookmark not found." }, 404);
     }
 
+    await deleteOgpImage(ogpDir, bookmark.ogpImageUrl);
     return c.body(null, 204);
   });
 
